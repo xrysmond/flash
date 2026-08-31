@@ -440,10 +440,11 @@ contract Searcher {
         ) {
             if (!unlocked || sqrtPriceX96 == 0) return r;
 
-            uint128 liq;
-            try IV3Pool(poolAddr).liquidity() returns (uint128 l) {
-                liq = l;
-            } catch { return r; }
+            // Direct call — no nested try/catch. viaIR has a known code-generation
+            // issue with try/catch inside a try body: it produces an INVALID opcode
+            // that silently kills the call with 0x returndata. Any pool that passes
+            // slot0() above is a valid contract and liquidity() will never revert.
+            uint128 liq = IV3Pool(poolAddr).liquidity();
 
             if (liq == 0) return r;
 
