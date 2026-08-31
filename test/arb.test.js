@@ -102,7 +102,14 @@ describe("UNCHAINED9 — Arbitrum Fork Test", function () {
     const MIN_PROFIT = ethers.parseUnits("1",    6);  // $1 — low floor so we see activity
 
     console.log("\n  ── USDC/USDT Scan ──────────────────────────────────");
-    const opp = await searcher.check(LOAN, MIN_PROFIT);
+    let opp;
+    try {
+      opp = await searcher.check(LOAN, MIN_PROFIT);
+    } catch(e) {
+      console.log(">>> REVERT BYTES:", e.data);
+      console.log(">>> REVERT MSG:  ", e.message);
+      throw e;
+    }
 
     if (opp.found) {
       console.log("  🔥 OPPORTUNITY FOUND");
@@ -130,7 +137,14 @@ describe("UNCHAINED9 — Arbitrum Fork Test", function () {
     const WBTC_MIN_PROFIT = ethers.parseUnits("0.00005", 8); // ~$5 at $100K/BTC
 
     console.log("\n  ── WBTC Scan ───────────────────────────────────────");
-    const opp = await searcher.checkWBTC(WBTC_LOAN, WBTC_MIN_PROFIT);
+    let opp;
+    try {
+      opp = await searcher.checkWBTC(WBTC_LOAN, WBTC_MIN_PROFIT);
+    } catch(e) {
+      console.log(">>> REVERT BYTES:", e.data);
+      console.log(">>> REVERT MSG:  ", e.message);
+      throw e;
+    }
 
     if (opp.found) {
       console.log("  🔥 WBTC OPPORTUNITY FOUND");
@@ -151,7 +165,14 @@ describe("UNCHAINED9 — Arbitrum Fork Test", function () {
     const LOAN       = ethers.parseUnits("50000", 6);
     const MIN_PROFIT = ethers.parseUnits("1",    6); // $1 — low enough to catch near-miss blocks
 
-    const opp = await searcher.check(LOAN, MIN_PROFIT);
+    let opp;
+    try {
+      opp = await searcher.check(LOAN, MIN_PROFIT);
+    } catch(e) {
+      console.log(">>> REVERT BYTES:", e.data);
+      console.log(">>> REVERT MSG:  ", e.message);
+      throw e;
+    }
 
     if (!opp.found) {
       console.log("\n  No opportunity at this block — execution test skipped.");
