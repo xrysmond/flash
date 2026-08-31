@@ -192,20 +192,9 @@ contract Searcher {
             }
         }
 
-        // ── Triangular: USDC→midA→midB→USDC ─────────────────────
-        // Only the highest-liquidity triangles to keep gas within eth_call limits
-        address[4] memory triMids = [WETH, WBTC, ARB, GMX];
-        for (uint a = 0; a < triMids.length; a++) {
-            for (uint b = a + 1; b < triMids.length; b++) {
-                Opportunity memory candidate = _checkTri(
-                    USDC, triMids[a], triMids[b], loan, bestProfit
-                );
-                if (candidate.found && candidate.profit > bestProfit) {
-                    bestProfit = candidate.profit;
-                    opp        = candidate;
-                }
-            }
-        }
+        // Triangular arb removed from check() — each triangle runs 13×13×13
+        // _allQuotes calls which pushes total gas past Arbitrum's 16M block cap.
+        // The 16 simple pairs above cover the vast majority of flash arb opportunities.
     }
 
     // ── G3: WBTC ARBITRAGE DETECTION ─────────────────────────────────────────
@@ -235,20 +224,7 @@ contract Searcher {
             }
         }
 
-        // ── WBTC triangular: WBTC→midA→midB→WBTC ────────────────────────────
-        // Subset of highest-liquidity mids to stay within eth_call gas limits.
-        address[3] memory wbtcTriMids = [WETH, ARB, GMX];
-        for (uint a = 0; a < wbtcTriMids.length; a++) {
-            for (uint b = a + 1; b < wbtcTriMids.length; b++) {
-                Opportunity memory candidate = _checkTri(
-                    WBTC, wbtcTriMids[a], wbtcTriMids[b], wbtcLoan, minProfitWBTC
-                );
-                if (candidate.found && candidate.profit > bestProfit) {
-                    bestProfit = candidate.profit;
-                    opp        = candidate;
-                }
-            }
-        }
+        // Triangular arb removed — same gas cap reason as check().
     }
 
     // ── SIMPLE ARB: base→mid→base ─────────────────────────────────
@@ -417,8 +393,10 @@ contract Searcher {
             if (rIn == 0 || rOut == 0) return r;
 
             // Standard Uniswap V2 formula: 0.3% fee (997/1000)
-            uint256 amtInFee  = amtIn * 997;
-            uint256 denom     = rIn * 1000 + amtInFee;
+            // _mulDiv replaces amtInFee * rOut to prevent overflow when amtIn is
+            // large (e.g. when fed output from a broken extreme-price V3 pool).
+            uint256 amtInFee = amtIn * 997;
+            uint256 denom    = rIn * 1000 + amtInFee;
             if (denom == 0) return r;
 
             r.ok        = true;
@@ -499,11 +477,14 @@ contract Searcher {
                 }
             }
 
-            if (grossOut == 0) return r;
+            // Cap guards against broken pools sitting at extreme tick boundaries
+            // whose sqrtPrice produces an astronomically large but valid uint256 output.
+            // No real arbitrage opportunity involves an output this large.
+            if (grossOut == 0 || grossOut > 1e34) return r;
 
             // Apply fee: output × (1e6 - fee) / 1e6
             uint256 netOut = grossOut * (1_000_000 - uint256(fee)) / 1_000_000;
-            if (netOut == 0 || netOut > 1e34) return r;
+            if (netOut == 0) return r;
 
             // ── Virtual depth of the current tick range ───────────────────────
             // Approximates tokenIn reserve within the current tick from L and sqrtP:
