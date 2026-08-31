@@ -21,7 +21,7 @@ module.exports = {
                             // viaIR alone bloats bytecode — optimizer MUST be enabled with it.
       optimizer: {
         enabled: true,
-        runs: 200,            // WHY: Minimizes deployment bytecode size.
+        runs: 1,            // WHY: Minimizes deployment bytecode size.
                             // check() is called via eth_call (zero gas), so execution
                             // efficiency doesn't matter for this contract. Deploy small.
       },
