@@ -418,12 +418,11 @@ contract Searcher {
 
             // Standard Uniswap V2 formula: 0.3% fee (997/1000)
             uint256 amtInFee  = amtIn * 997;
-            uint256 numerator = amtInFee * rOut;
             uint256 denom     = rIn * 1000 + amtInFee;
             if (denom == 0) return r;
 
             r.ok        = true;
-            r.amountOut = numerator / denom;
+            r.amountOut = _mulDiv(amtInFee, rOut, denom);
             r.dexType   = 0;
             r.router    = isSushi ? SUSHI_ROUTER : CAMELOT_ROUTER;
             r.isSushi   = isSushi;
@@ -504,7 +503,7 @@ contract Searcher {
 
             // Apply fee: output × (1e6 - fee) / 1e6
             uint256 netOut = grossOut * (1_000_000 - uint256(fee)) / 1_000_000;
-            if (netOut == 0) return r;
+            if (netOut == 0 || netOut > 1e34) return r;
 
             // ── Virtual depth of the current tick range ───────────────────────
             // Approximates tokenIn reserve within the current tick from L and sqrtP:
