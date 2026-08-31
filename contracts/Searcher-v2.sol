@@ -372,39 +372,44 @@ contract Searcher {
         uint256    amtIn,
         bool       isSushi
     ) internal view returns (QuoteResult memory r) {
-        address pairAddr;
-        try factory.getPair(tIn, tOut) returns (address p) {
-            pairAddr = p;
-        } catch { return r; }
+        // Low-level staticcall throughout — no try/catch anywhere in the hot path.
+        // viaIR is known to generate broken Yul for try/catch inside view functions
+        // on Arbitrum fork: the call reverts with empty 0x data. staticcall is immune.
+        (bool pairOk, bytes memory pairData) = address(factory).staticcall(
+            abi.encodeWithSignature("getPair(address,address)", tIn, tOut)
+        );
+        if (!pairOk || pairData.length < 32) return r;
+        address pairAddr = abi.decode(pairData, (address));
         if (pairAddr == address(0)) return r;
 
-        try IV2Pair(pairAddr).getReserves() returns (
-            uint112 res0, uint112 res1, uint32
-        ) {
-            if (res0 == 0 || res1 == 0) return r;
+        (bool resOk, bytes memory resData) = pairAddr.staticcall(
+            abi.encodeWithSignature("getReserves()")
+        );
+        if (!resOk || resData.length < 64) return r;
+        (uint112 res0, uint112 res1,) = abi.decode(resData, (uint112, uint112, uint32));
+        if (res0 == 0 || res1 == 0) return r;
 
-            // All Uniswap V2 forks (Sushi, Camelot) enforce token0 < token1 at
-            // pool creation — no external token0() call needed or safe here.
-            bool isTIn0 = tIn < tOut;
-            (uint256 rIn, uint256 rOut) = isTIn0
-                ? (uint256(res0), uint256(res1))
-                : (uint256(res1), uint256(res0));
+        // All Uniswap V2 forks (Sushi, Camelot) enforce token0 < token1 at
+        // pool creation — no external token0() call needed or safe here.
+        bool isTIn0 = tIn < tOut;
+        (uint256 rIn, uint256 rOut) = isTIn0
+            ? (uint256(res0), uint256(res1))
+            : (uint256(res1), uint256(res0));
 
-            if (rIn == 0 || rOut == 0) return r;
+        if (rIn == 0 || rOut == 0) return r;
 
-            // Standard Uniswap V2 formula: 0.3% fee (997/1000)
-            // _mulDiv replaces amtInFee * rOut to prevent overflow when amtIn is
-            // large (e.g. when fed output from a broken extreme-price V3 pool).
-            uint256 amtInFee = amtIn * 997;
-            uint256 denom    = rIn * 1000 + amtInFee;
-            if (denom == 0) return r;
+        // Standard Uniswap V2 formula: 0.3% fee (997/1000)
+        // _mulDiv replaces amtInFee * rOut to prevent overflow when amtIn is
+        // large (e.g. when fed output from a broken extreme-price V3 pool).
+        uint256 amtInFee = amtIn * 997;
+        uint256 denom    = rIn * 1000 + amtInFee;
+        if (denom == 0) return r;
 
-            r.ok        = true;
-            r.amountOut = _mulDiv(amtInFee, rOut, denom);
-            r.dexType   = 0;
-            r.router    = isSushi ? SUSHI_ROUTER : CAMELOT_ROUTER;
-            r.isSushi   = isSushi;
-        } catch {}
+        r.ok        = true;
+        r.amountOut = _mulDiv(amtInFee, rOut, denom);
+        r.dexType   = 0;
+        r.router    = isSushi ? SUSHI_ROUTER : CAMELOT_ROUTER;
+        r.isSushi   = isSushi;
     }
 
     // ── V3 QUOTE with liquidity-bounded price impact correction ─────────────
@@ -428,104 +433,103 @@ contract Searcher {
         uint256    amtIn,
         uint24     fee
     ) internal view returns (QuoteResult memory r) {
-        address poolAddr;
-        try factory.getPool(tIn, tOut, fee) returns (address p) {
-            poolAddr = p;
-        } catch { return r; }
+        // Low-level staticcall throughout — see _quoteV2 comment above.
+        (bool poolOk, bytes memory poolData) = address(factory).staticcall(
+            abi.encodeWithSignature("getPool(address,address,uint24)", tIn, tOut, fee)
+        );
+        if (!poolOk || poolData.length < 32) return r;
+        address poolAddr = abi.decode(poolData, (address));
         if (poolAddr == address(0)) return r;
 
-        try IV3Pool(poolAddr).slot0() returns (
-            uint160 sqrtPriceX96,
-            int24, uint16, uint16, uint16, uint8, bool unlocked
-        ) {
-            if (!unlocked || sqrtPriceX96 == 0) return r;
+        (bool slot0Ok, bytes memory slot0Data) = poolAddr.staticcall(
+            abi.encodeWithSignature("slot0()")
+        );
+        if (!slot0Ok || slot0Data.length < 224) return r;
+        (uint160 sqrtPriceX96, , , , , , bool unlocked) = abi.decode(
+            slot0Data,
+            (uint160, int24, uint16, uint16, uint16, uint8, bool)
+        );
+        if (!unlocked || sqrtPriceX96 == 0) return r;
 
-            // Direct call — no nested try/catch. viaIR has a known code-generation
-            // issue with try/catch inside a try body: it produces an INVALID opcode
-            // that silently kills the call with 0x returndata. Any pool that passes
-            // slot0() above is a valid contract and liquidity() will never revert.
-            uint128 liq = IV3Pool(poolAddr).liquidity();
+        uint128 liq = IV3Pool(poolAddr).liquidity();
+        if (liq == 0) return r;
 
-            if (liq == 0) return r;
+        // All Uniswap V3 forks (Uni, PCS, Sushi) enforce token0 < token1 at
+        // pool creation — no external token0() call needed or safe here.
+        bool isTIn0 = tIn < tOut;
 
-            // All Uniswap V3 forks (Uni, PCS, Sushi) enforce token0 < token1 at
-            // pool creation — no external token0() call needed or safe here.
-            bool isTIn0 = tIn < tOut;
+        // ── Gross output at current price ────────────────────────────────
+        // Formula unchanged: amtIn × sqrtP² / 2^192  (or inverse).
+        // FIX: original pre-computed sqrtP² as a plain uint256 multiply,
+        // which panics with arithmetic overflow on pools where sqrtP > 2^128
+        // (e.g. WBTC/LINK, WBTC/ARB at certain price ratios).
+        // Now factors the squaring into two _mulDiv calls so FullMath's
+        // 512-bit engine handles the full product internally — no pre-overflow.
+        //   sqPScaled  = sqrtP × sqrtP / 2^96   (exact, 512-bit safe)
+        //   tIn == t0: grossOut = amtIn × sqPScaled / 2^96  = amtIn × sqrtP² / 2^192
+        //   tIn != t0: grossOut = amtIn × 2^96  / sqPScaled = amtIn × 2^192 / sqrtP²
+        uint256 grossOut;
+        {
+            uint256 sqPScaled = _mulDiv(
+                uint256(sqrtPriceX96),
+                uint256(sqrtPriceX96),
+                (1 << 96)
+            );
+            if (sqPScaled == 0) return r;
 
-            // ── Gross output at current price ────────────────────────────────
-            // Formula unchanged: amtIn × sqrtP² / 2^192  (or inverse).
-            // FIX: original pre-computed sqrtP² as a plain uint256 multiply,
-            // which panics with arithmetic overflow on pools where sqrtP > 2^128
-            // (e.g. WBTC/LINK, WBTC/ARB at certain price ratios).
-            // Now factors the squaring into two _mulDiv calls so FullMath's
-            // 512-bit engine handles the full product internally — no pre-overflow.
-            //   sqPScaled  = sqrtP × sqrtP / 2^96   (exact, 512-bit safe)
-            //   tIn == t0: grossOut = amtIn × sqPScaled / 2^96  = amtIn × sqrtP² / 2^192
-            //   tIn != t0: grossOut = amtIn × 2^96  / sqPScaled = amtIn × 2^192 / sqrtP²
-            uint256 grossOut;
-            {
-                uint256 sqPScaled = _mulDiv(
-                    uint256(sqrtPriceX96),
-                    uint256(sqrtPriceX96),
-                    (1 << 96)
-                );
-                if (sqPScaled == 0) return r;
-
-                if (isTIn0) {
-                    grossOut = _mulDiv(amtIn, sqPScaled, (1 << 96));
-                } else {
-                    grossOut = _mulDiv(amtIn, (1 << 96), sqPScaled);
-                }
-            }
-
-            // Cap guards against broken pools sitting at extreme tick boundaries
-            // whose sqrtPrice produces an astronomically large but valid uint256 output.
-            // No real arbitrage opportunity involves an output this large.
-            if (grossOut == 0 || grossOut > 1e34) return r;
-
-            // Apply fee: output × (1e6 - fee) / 1e6
-            uint256 netOut = grossOut * (1_000_000 - uint256(fee)) / 1_000_000;
-            if (netOut == 0) return r;
-
-            // ── Virtual depth of the current tick range ───────────────────────
-            // Approximates tokenIn reserve within the current tick from L and sqrtP:
-            //   tIn == token0:  virtualReserveIn ≈ L × 2^96 / sqrtP
-            //   tIn == token1:  virtualReserveIn ≈ L × sqrtP / 2^96
-            // Conservative overestimate — actual depth decreases as price moves
-            // through tick ranges, so this is the safe direction for a cutoff.
-            uint256 virtualReserveIn;
             if (isTIn0) {
-                virtualReserveIn = _mulDiv(uint256(liq), (1 << 96), uint256(sqrtPriceX96));
+                grossOut = _mulDiv(amtIn, sqPScaled, (1 << 96));
             } else {
-                virtualReserveIn = _mulDiv(uint256(liq), uint256(sqrtPriceX96), (1 << 96));
+                grossOut = _mulDiv(amtIn, (1 << 96), sqPScaled);
             }
+        }
 
-            if (virtualReserveIn == 0) return r;
+        // Cap guards against broken pools sitting at extreme tick boundaries
+        // whose sqrtPrice produces an astronomically large but valid uint256 output.
+        // No real arbitrage opportunity involves an output this large.
+        if (grossOut == 0 || grossOut > 1e34) return r;
 
-            // ── Price impact correction ───────────────────────────────────────
-            uint256 threshold80 = (virtualReserveIn * 80) / 100;
-            if (amtIn >= threshold80) return r; // >80% of depth — unreliable, skip
+        // Apply fee: output × (1e6 - fee) / 1e6
+        uint256 netOut = grossOut * (1_000_000 - uint256(fee)) / 1_000_000;
+        if (netOut == 0) return r;
 
-            uint256 threshold20 = virtualReserveIn / 5; // 20%
-            if (amtIn > threshold20) {
-                // Linear discount: 0 bps at 20% depth → 1000 bps at 80% depth
-                uint256 excess    = amtIn - threshold20;
-                uint256 range     = threshold80 - threshold20; // 60% band
-                uint256 impactBps = range > 0 ? (excess * 1000) / range : 1000;
-                if (impactBps > 1000) impactBps = 1000;
-                netOut = netOut * (10000 - impactBps) / 10000;
-            }
-            // Below 20%: trade fits well within current tick — no correction
+        // ── Virtual depth of the current tick range ───────────────────────
+        // Approximates tokenIn reserve within the current tick from L and sqrtP:
+        //   tIn == token0:  virtualReserveIn ≈ L × 2^96 / sqrtP
+        //   tIn == token1:  virtualReserveIn ≈ L × sqrtP / 2^96
+        // Conservative overestimate — actual depth decreases as price moves
+        // through tick ranges, so this is the safe direction for a cutoff.
+        uint256 virtualReserveIn;
+        if (isTIn0) {
+            virtualReserveIn = _mulDiv(uint256(liq), (1 << 96), uint256(sqrtPriceX96));
+        } else {
+            virtualReserveIn = _mulDiv(uint256(liq), uint256(sqrtPriceX96), (1 << 96));
+        }
 
-            if (netOut == 0) return r;
+        if (virtualReserveIn == 0) return r;
 
-            r.ok        = true;
-            r.amountOut = netOut;
-            r.dexType   = 1;
-            r.router    = router;
-            r.v3Fee     = fee;
+        // ── Price impact correction ───────────────────────────────────────
+        uint256 threshold80 = (virtualReserveIn * 80) / 100;
+        if (amtIn >= threshold80) return r; // >80% of depth — unreliable, skip
 
-        } catch {}
+        uint256 threshold20 = virtualReserveIn / 5; // 20%
+        if (amtIn > threshold20) {
+            // Linear discount: 0 bps at 20% depth → 1000 bps at 80% depth
+            uint256 excess    = amtIn - threshold20;
+            uint256 range     = threshold80 - threshold20; // 60% band
+            uint256 impactBps = range > 0 ? (excess * 1000) / range : 1000;
+            if (impactBps > 1000) impactBps = 1000;
+            netOut = netOut * (10000 - impactBps) / 10000;
+        }
+        // Below 20%: trade fits well within current tick — no correction
+
+        if (netOut == 0) return r;
+
+        r.ok        = true;
+        r.amountOut = netOut;
+        r.dexType   = 1;
+        r.router    = router;
+        r.v3Fee     = fee;
     }
 
     // ── HELPERS ───────────────────────────────────────────────────
