@@ -398,7 +398,7 @@ async function batchQuotes(requests) {
   if (!requests.length) return [];
   const calls = requests.map(r => ({ target: r.target, allowFailure: true, callData: r.callData }));
   let raw;
-  try { raw = await mc3.aggregate3.staticCall(calls); }
+  try { raw = await mc3.aggregate3.staticCall(calls, { gasLimit: 50_000_000n }); }
   catch (e) {
     err(`Multicall3 failed — ${e.message?.slice(0, 80)}`);
     return requests.map(() => null);
@@ -694,7 +694,7 @@ async function detectViaSearcher(blockNum) {
 
   let raw;
   try {
-    raw = await searcher.check(DETECT_AMOUNT, MIN_PROFIT);
+    raw = await searcher.check(DETECT_AMOUNT, MIN_PROFIT, { gasLimit: 100_000_000n });
   } catch (e) {
     warn(`Searcher.check failed — ${e.message?.slice(0, 60)} — suspended for ${SEARCHER_RETRY_BLOCKS} blocks`);
     searcherAvailable     = false;
@@ -783,7 +783,7 @@ async function detectViaSearcher(blockNum) {
     try {
       const wbtcLoan      = WBTC_SIZE_LADDER[0];
       const wbtcMinProfit = minProfitWBTC(MIN_PROFIT);
-      const wbtcRaw       = await searcher.checkWBTC(wbtcLoan, wbtcMinProfit);
+      const wbtcRaw       = await searcher.checkWBTC(wbtcLoan, wbtcMinProfit, { gasLimit: 100_000_000n });
       if (wbtcRaw.found) {
         wbtcOpp = {
           type        : wbtcRaw.legs.length === 2 ? 'SIMPLE' : 'TRIANGULAR',
