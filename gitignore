@@ -1,0 +1,11 @@
+# Private key — never commit this
+.env
+
+# Trade logs — append-only, can grow large
+*.jsonl
+
+# Node modules
+node_modules/
+
+# pm2 logs
+*.log

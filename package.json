@@ -1,0 +1,19 @@
+{
+  "name": "unchained9-scanner",
+  "version": "10.1.0",
+  "description": "UNCHAINED9 Flash Arbitrage Scanner — Arbitrum One",
+  "main": "scanner-v10.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node scanner-v10.js",
+    "pm2:start": "pm2 start scanner-v10.js --name unchained9",
+    "pm2:logs": "pm2 logs unchained9",
+    "pm2:status": "pm2 status"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  },
+  "private": true
+}
