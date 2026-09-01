@@ -169,6 +169,16 @@ contract Searcher {
         view
         returns (Opportunity memory opp)
     {
+        // CRITICAL: initialize dynamic fields before ANY computation.
+        // viaIR uses scratch space (memory[0]) for _mulDiv assembly intermediates.
+        // An uninitialized Leg[] or string has a null pointer (address 0), so when
+        // the ABI encoder reads its "length" it reads mload(0) — which contains
+        // garbage from the scratch space — and tries to encode a garbage-length
+        // array. This produces a 0x revert. Explicit initialization points these
+        // fields to real heap memory with length=0, which encodes correctly.
+        opp.legs        = new Leg[](0);
+        opp.description = "";
+
         if (loan < MIN_LOAN) loan = MIN_LOAN;
 
         uint256 bestProfit = minProfit > 0 ? minProfit - 1 : 0;
@@ -211,6 +221,9 @@ contract Searcher {
         uint256 wbtcLoan,
         uint256 minProfitWBTC
     ) external view returns (Opportunity memory opp) {
+        opp.legs        = new Leg[](0); // same null-pointer fix as check()
+        opp.description = "";
+
         uint256 bestProfit = 0;
 
         // ── WBTC simple pairs: WBTC→mid→WBTC ────────────────────────────────
