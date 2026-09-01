@@ -17,7 +17,7 @@ module.exports = {
                             // 0.8.26 has substantially better Yul/IR optimizer — same contract
                             // compiles to ~17.6KB instead. Pragma ^0.8.19 allows this version.
     settings: {
-      viaIR: true,          // Required: Searcher.sol hits stack-too-deep without IR pipeline.
+      viaIR: false,          // Required: Searcher.sol hits stack-too-deep without IR pipeline.
                             // viaIR alone bloats bytecode — optimizer MUST be enabled with it.
       optimizer: {
         enabled: true,
