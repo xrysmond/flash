@@ -255,6 +255,7 @@ const SEARCHER_ABI = [
 
 // ── STATE ──────────────────────────────────────────────────────────────────
 let readProvider   = null;
+let alchemyProvider = null;
 let submitProvider = null;
 let wallet         = null;
 let submitWallet   = null;
@@ -1523,12 +1524,21 @@ async function connect() {
       readProvider  = ws;
       wallet        = new ethers.Wallet(CONFIG.PRIVATE_KEY, readProvider);
       contract      = new ethers.Contract(CONFIG.CONTRACT_ADDR, CONTRACT_ABI, wallet);
-      mc3           = new ethers.Contract(MC3_ADDR, MC3_ABI, readProvider);
+
+      // Route eth_call reads through Alchemy which allows higher gas for check()
+      if (CONFIG.ALCHEMY_KEY) {
+        alchemyProvider = new ethers.JsonRpcProvider(`https://arb-mainnet.g.alchemy.com/v2/${CONFIG.ALCHEMY_KEY}`);
+        ok(`Alchemy HTTP provider ready for eth_call`);
+      } else {
+        alchemyProvider = readProvider;
+      }
+
+      mc3           = new ethers.Contract(MC3_ADDR, MC3_ABI, alchemyProvider);
       MIN_PROFIT    = ethers.parseUnits(CONFIG.MIN_PROFIT_USD.toString(), 6);
 
       // S1: Wire up Searcher if address is configured
       if (CONFIG.SEARCHER_ADDR) {
-        searcher          = new ethers.Contract(CONFIG.SEARCHER_ADDR, SEARCHER_ABI, readProvider);
+        searcher          = new ethers.Contract(CONFIG.SEARCHER_ADDR, SEARCHER_ABI, alchemyProvider);
         searcherAvailable = true;
         ok(`S1 Searcher: ${CONFIG.SEARCHER_ADDR}`);
       } else {
