@@ -1560,6 +1560,33 @@ async function connect() {
         searcher          = new ethers.Contract(CONFIG.SEARCHER_ADDR, SEARCHER_ABI, alchemyProvider);
         searcherAvailable = true;
         ok(`S1 Searcher: ${CONFIG.SEARCHER_ADDR}`);
+
+        // ── STARTUP DIAGNOSTIC ────────────────────────────────────────────────
+        // Makes a raw fetch() to Alchemy to see EXACTLY what the RPC returns
+        // for check(). Bypasses ethers.js completely. Logs once on startup.
+        if (CONFIG.ALCHEMY_KEY) {
+          try {
+            const diagUrl = `https://arb-mainnet.g.alchemy.com/v2/${CONFIG.ALCHEMY_KEY}`;
+            const diagBody = JSON.stringify({
+              jsonrpc: '2.0', id: 1,
+              method: 'eth_call',
+              params: [{
+                to  : CONFIG.SEARCHER_ADDR,
+                data: '0x8fefd8ea'
+                    + '0000000000000000000000000000000000000000000000000000000ba43b7400'
+                    + '00000000000000000000000000000000000000000000000000000000000f4240',
+                gas : '0x1DCD6500',  // 500M
+              }, 'latest'],
+            });
+            const diagRes  = await fetch(diagUrl, { method:'POST', headers:{'Content-Type':'application/json'}, body: diagBody });
+            const diagJson = await diagRes.json();
+            ok(`DIAG raw eth_call response: ${JSON.stringify(diagJson)}`);
+          } catch (diagErr) {
+            warn(`DIAG fetch failed: ${diagErr.message}`);
+          }
+        }
+        // ── END DIAGNOSTIC ────────────────────────────────────────────────────
+
       } else {
         info('SEARCHER_ADDR not set — running Multicall3 fallback path only');
       }
